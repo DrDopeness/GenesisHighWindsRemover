@@ -28,9 +28,6 @@
     <None Include="configs\config.json">
       <Filter>Configuration</Filter>
     </None>
-    <None Include="configs\config.status-only.json">
-      <Filter>Configuration</Filter>
-    </None>
     <None Include="configs\PluginInfo.json">
       <Filter>Configuration</Filter>
     </None>

@@ -14,57 +14,43 @@ int main()
     assert(!gwh::IsAllowedMap("Gen2_WP", maps));
     assert(!gwh::IsAllowedMap("TheIsland_WP", maps));
 
-    assert(gwh::ExtractGeneratedClassLeaf(
-        "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/"
-        "Gen_AreaBuff_Arctic.Gen_AreaBuff_Arctic_C") ==
-        "Gen_AreaBuff_Arctic_C");
-    assert(gwh::ExtractGeneratedClassLeaf("  ArcticBlizzard_High_C  ") ==
-        "ArcticBlizzard_High_C");
+    assert(gwh::ExtractGeneratedClassLeaf("  Buff_SkiffBuffetedByWind_C  ") ==
+        "Buff_SkiffBuffetedByWind_C");
     assert(gwh::ExtractGeneratedClassLeaf(
         "BlueprintGeneratedClass'/Game/Test/TestBuff.TestBuff_C'") ==
         "TestBuff_C");
 
-    const std::vector<std::string> controller_exact{
-        "Gen_AreaBuff_Arctic_C",
-        "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/"
-        "Gen_AreaBuff_Arctic.Gen_AreaBuff_Arctic_C"
+    const std::vector<std::string> skiff_exact{
+        "Buff_SkiffBuffetedByWind_C"
     };
-    const std::vector<std::string> status_exact{
-        "ArcticBlizzard_High_C",
-        "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/ArcticSubBuffs/"
-        "ArcticBlizzard_High.ArcticBlizzard_High_C"
-    };
-    const std::vector<std::string> contains{ "arcticblizzardhigh", "highwind" };
+    const std::vector<std::string> contains{ "buffetedbywind", "highwind" };
 
     assert(gwh::MatchesBuffIdentifier(
-        "Gen_AreaBuff_Arctic_C", "ignored", controller_exact, {}));
+        "Buff_SkiffBuffetedByWind_C", "ignored", skiff_exact, {}));
     assert(gwh::MatchesBuffIdentifier(
-        "GEN_AREABUFF_ARCTIC_C", "ignored", controller_exact, {}));
+        "BUFF_SKIFFBUFFETEDBYWIND_C", "ignored", skiff_exact, {}));
     assert(!gwh::MatchesBuffIdentifier(
-        "ArcticBlizzard_High_C", "ignored", controller_exact, {}));
+        "Buff_Skiff_BuffetedByWind_C", "ignored", skiff_exact, {}));
 
     assert(gwh::MatchesBuffIdentifier(
-        "ArcticBlizzard_High_C", "ignored", status_exact, contains));
+        "Buff_SkiffBuffetedByWind_C", "ignored", skiff_exact, contains));
     assert(gwh::MatchesBuffIdentifier(
-        "ARCTICBLIZZARD_HIGH_C", "ignored", status_exact, contains));
-    assert(gwh::MatchesBuffIdentifier(
-        "Future_High_Winds_Buff_C", "ignored", status_exact, contains));
+        "Future_High_Winds_Buff_C", "ignored", skiff_exact, contains));
     assert(gwh::MatchesBuffIdentifier(
         "Unknown_C",
-        "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/ArcticSubBuffs/"
-        "ArcticBlizzard_High.ArcticBlizzard_High_C",
-        status_exact,
+        "/Game/Test/Buff_SkiffBuffetedByWind.Buff_SkiffBuffetedByWind_C",
+        skiff_exact,
         contains));
 
     assert(!gwh::MatchesBuffIdentifier(
-        "ArcticBlizzard_Med_C", "ignored", status_exact, contains));
+        "Gen_AreaBuff_Arctic_C", "ignored", skiff_exact, contains));
     assert(!gwh::MatchesBuffIdentifier(
-        "ArcticBlizzard_Low_C", "ignored", status_exact, contains));
+        "ArcticBlizzard_High_C", "ignored", skiff_exact, contains));
     assert(!gwh::MatchesBuffIdentifier(
-        "Buff_SkiffBuffetedByWind_C", "ignored", status_exact, contains));
+        "ArcticBlizzard_Low_C", "ignored", skiff_exact, contains));
 
-    assert(gwh::NormalizeIdentifier("ArcticBlizzard_High_C") ==
-        "arcticblizzardhighc");
+    assert(gwh::NormalizeIdentifier("Buff_SkiffBuffetedByWind_C") ==
+        "buffskiffbuffetedbywindc");
 
     std::cout << "Matching tests passed\n";
     return 0;

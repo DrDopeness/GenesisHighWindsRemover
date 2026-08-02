@@ -82,20 +82,15 @@ namespace
         Settings settings;
         settings.allowed_maps = { "Genesis_WP" };
         settings.exact_blocked_class_names_or_paths = {
-            "Gen_AreaBuff_Arctic_C",
-            "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/"
-            "Gen_AreaBuff_Arctic.Gen_AreaBuff_Arctic_C"
+            "Buff_SkiffBuffetedByWind_C"
         };
         settings.exact_cleanup_class_names_or_paths = {
-            "Gen_AreaBuff_Arctic_C",
-            "ArcticBlizzard_High_C",
-            "ArcticBlizzard_Med_C",
-            "ArcticBlizzard_Low_C",
-            "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/ArcticSubBuffs/"
-            "ArcticBlizzard_High.ArcticBlizzard_High_C"
+            "Buff_SkiffBuffetedByWind_C"
         };
         settings.normalized_blocked_class_name_contains = {};
-        settings.discovery_normalized_name_contains = { "wind", "blizzard" };
+        settings.discovery_normalized_name_contains = {
+            "skiffbuffetedbywind", "buffetedbywind", "wind"
+        };
         return settings;
     }
 
@@ -404,9 +399,42 @@ namespace
 
         const BuffClassInfo info = GetBuffClassInfo(buff_class);
         Log::GetLog()->info(
-            "Blocked Genesis high-winds buff: class='{}', path='{}'",
+            "Blocked TEK Hover Skiff wind debuff: class='{}', path='{}'",
             info.name,
             info.path);
+    }
+
+    std::uint64_t DeactivateMatchingBuffsOnCharacter(
+        APrimalCharacter* character,
+        const Settings& settings)
+    {
+        if (!character)
+            return 0;
+
+        // Deactivate() can mutate the live Buffs array, so collect matches from
+        // a copy before removing them. This clears an already-active skiff wind
+        // debuff when the environmental system next attempts to reapply it.
+        const auto buffs = character->BuffsField();
+        std::vector<APrimalBuff*> matches;
+        for (APrimalBuff* buff : buffs)
+        {
+            if (buff && MatchesExactClass(
+                    buff->ClassPrivateField(),
+                    settings.exact_cleanup_class_names))
+            {
+                matches.push_back(buff);
+            }
+        }
+
+        for (APrimalBuff* buff : matches)
+            buff->Deactivate();
+
+        if (!matches.empty())
+        {
+            g_deactivated_total.fetch_add(matches.size(), std::memory_order_relaxed);
+        }
+
+        return matches.size();
     }
 
     SweepResult SweepExistingPlayerBuffs()
@@ -442,12 +470,10 @@ namespace
 
             ++result.players;
 
-            // Deactivate() can mutate the live Buffs array. Identify matches from
-            // a copy first, then remove residual tier statuses before the blocked
-            // controller target so controller cleanup cannot invalidate the scan.
+            // Deactivate() can mutate the live Buffs array. Identify every exact
+            // cleanup match from a copy before removing any instance.
             const auto buffs = character->BuffsField();
-            std::vector<APrimalBuff*> residual_buffs;
-            std::vector<APrimalBuff*> blocked_target_buffs;
+            std::vector<APrimalBuff*> cleanup_buffs;
             for (APrimalBuff* buff : buffs)
             {
                 if (!buff)
@@ -458,26 +484,11 @@ namespace
                         buff->ClassPrivateField(),
                         settings->exact_cleanup_class_names))
                 {
-                    if (MatchesExactClass(
-                            buff->ClassPrivateField(),
-                            settings->exact_blocked_class_names))
-                    {
-                        blocked_target_buffs.push_back(buff);
-                    }
-                    else
-                    {
-                        residual_buffs.push_back(buff);
-                    }
+                    cleanup_buffs.push_back(buff);
                 }
             }
 
-            for (APrimalBuff* buff : residual_buffs)
-            {
-                buff->Deactivate();
-                ++result.buffs_deactivated;
-            }
-
-            for (APrimalBuff* buff : blocked_target_buffs)
+            for (APrimalBuff* buff : cleanup_buffs)
             {
                 buff->Deactivate();
                 ++result.buffs_deactivated;
@@ -648,6 +659,16 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     {
         g_blocked_total.fetch_add(1, std::memory_order_relaxed);
         LogFirstBlockedClass(buff_class, *settings);
+
+        const std::uint64_t deactivated =
+            DeactivateMatchingBuffsOnCharacter(for_character, *settings);
+        if (deactivated > 0)
+        {
+            Log::GetLog()->info(
+                "Deactivated {} existing TEK Hover Skiff wind debuff instance(s) on the target",
+                deactivated);
+        }
+
         return nullptr;
     }
 
@@ -749,7 +770,7 @@ extern "C" __declspec(dllexport) void Plugin_Init()
     }
 
     Log::GetLog()->info(
-        "Loaded; targeting Gen_AreaBuff_Arctic_C on Genesis_WP (AsaApi {})",
+        "Loaded; targeting Buff_SkiffBuffetedByWind_C on Genesis_WP (AsaApi {})",
         AsaApi::Tools::GetApiVersion());
 }
 

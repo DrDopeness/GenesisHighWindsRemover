@@ -1,7 +1,7 @@
 {
   "FullName": "Genesis High Winds Remover",
-  "Description": "Disables the Genesis 1 Arctic blizzard controller, with an included status-only profile.",
-  "Version": 1.0,
+  "Description": "Blocks the Genesis 1 TEK Hover Skiff Buffeted by Wind debuff without disabling the Arctic storm controller.",
+  "Version": 1.01,
   "MinApiVersion": 2.03,
   "Dependencies": []
 }

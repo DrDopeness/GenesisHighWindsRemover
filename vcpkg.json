@@ -1,6 +1,6 @@
 {
   "name": "genesis-high-winds-remover",
-  "version-string": "1.0.0",
+  "version-string": "1.0.1",
   "dependencies": [
     "fmt"
   ],

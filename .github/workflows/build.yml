@@ -58,6 +58,6 @@ jobs:
       - name: Upload deployable plugin folder
         uses: actions/upload-artifact@v4
         with:
-          name: GenesisHighWindsRemover-1.0.0
+          name: GenesisHighWindsRemover-1.0.1
           path: out/GenesisHighWindsRemover/
           if-no-files-found: error

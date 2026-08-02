@@ -80,7 +80,6 @@
     <PostBuildEvent>
       <Command>copy /y "$(TargetDir)$(TargetFileName)" "$(TargetDir)$(TargetFileName).ArkApi"
 copy /y "$(SolutionDir)configs\config.json" "$(TargetDir)config.json"
-copy /y "$(SolutionDir)configs\config.status-only.json" "$(TargetDir)config.status-only.json"
 copy /y "$(SolutionDir)configs\PluginInfo.json" "$(TargetDir)PluginInfo.json"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -94,7 +93,6 @@ copy /y "$(SolutionDir)configs\PluginInfo.json" "$(TargetDir)PluginInfo.json"</C
   </ItemGroup>
   <ItemGroup>
     <None Include="configs\config.json" />
-    <None Include="configs\config.status-only.json" />
     <None Include="configs\PluginInfo.json" />
     <None Include="vcpkg.json" />
     <None Include="vcpkg-configuration.json" />
