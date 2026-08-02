@@ -33,6 +33,7 @@ namespace
         std::vector<std::string> exact_blocked_class_names_or_paths;
         std::vector<std::string> exact_cleanup_class_names_or_paths;
         std::vector<std::string> mounted_only_cleanup_class_names_or_paths;
+        std::vector<std::string> vehicle_class_names_or_paths;
         std::vector<std::string> normalized_blocked_class_name_contains;
         std::vector<std::string> discovery_normalized_name_contains;
 
@@ -41,6 +42,7 @@ namespace
         std::vector<FName> exact_blocked_class_names;
         std::vector<FName> exact_cleanup_class_names;
         std::vector<FName> mounted_only_cleanup_class_names;
+        std::vector<FName> vehicle_class_names;
     };
 
     struct BuffClassInfo
@@ -197,6 +199,10 @@ namespace
             root,
             "MountedOnlyCleanupClassNamesOrPaths",
             settings.mounted_only_cleanup_class_names_or_paths);
+        settings.vehicle_class_names_or_paths = ReadStringArray(
+            root,
+            "VehicleClassNames",
+            settings.vehicle_class_names_or_paths);
         settings.normalized_blocked_class_name_contains = ReadStringArray(
             root,
             "NormalizedBlockedClassNameContains",
@@ -231,6 +237,9 @@ namespace
         BuildFastClassNames(
             settings.mounted_only_cleanup_class_names_or_paths,
             settings.mounted_only_cleanup_class_names);
+        BuildFastClassNames(
+            settings.vehicle_class_names_or_paths,
+            settings.vehicle_class_names);
         return settings;
     }
 
@@ -572,8 +581,24 @@ namespace
             ++result.players;
 
             APawn* possessed = base_controller->GetPawnOrSpectator();
-            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
-            const bool is_riding = (possessed && possessed != character) || mount;
+            bool on_vehicle = false;
+            if (possessed && possessed != character &&
+                !settings->vehicle_class_names.empty())
+            {
+                UClass* pawn_class = possessed->ClassPrivateField();
+                if (pawn_class)
+                {
+                    const FName pawn_name = pawn_class->NamePrivateField();
+                    for (const FName& vehicle : settings->vehicle_class_names)
+                    {
+                        if (pawn_name == vehicle)
+                        {
+                            on_vehicle = true;
+                            break;
+                        }
+                    }
+                }
+            }
 
             const auto buffs = character->BuffsField();
             for (APrimalBuff* buff : buffs)
@@ -585,7 +610,7 @@ namespace
 
             result.buffs_deactivated += DeactivateMatchingBuffsOnCharacter(
                 character, settings->exact_cleanup_class_names);
-            if (is_riding)
+            if (on_vehicle)
             {
                 result.buffs_deactivated += DeactivateMatchingBuffsOnCharacter(
                     character, settings->mounted_only_cleanup_class_names);
@@ -671,6 +696,8 @@ namespace
                  << (settings ? settings->exact_cleanup_class_names.size() : 0)
                  << ", mountedOnlyCleanupTargets="
                  << (settings ? settings->mounted_only_cleanup_class_names.size() : 0)
+                 << ", vehicleClasses="
+                 << (settings ? settings->vehicle_class_names.size() : 0)
                  << ", AsaApi=" << AsaApi::Tools::GetApiVersion();
 
         SendRconReply(connection, packet, response.str());
@@ -730,6 +757,69 @@ namespace
         response << "Logged " << unique_classes.size() << " unique active buff class(es) from "
                  << instances << " instance(s) across " << players
                  << " online player(s). See the ArkApi log or server console.";
+        SendRconReply(connection, packet, response.str());
+    }
+
+    void DumpPawnRcon(RCONClientConnection* connection, RCONPacket* packet, UWorld*)
+    {
+        UWorld* world = AsaApi::GetApiUtils().GetWorld();
+        if (!world)
+        {
+            SendRconReply(connection, packet, "World is not ready.");
+            return;
+        }
+
+        std::ostringstream response;
+        std::uint64_t players = 0;
+
+        const auto& controllers = world->PlayerControllerListField();
+        for (TWeakObjectPtr<APlayerController> weak_controller : controllers)
+        {
+            APlayerController* base_controller = weak_controller.Get();
+            if (!base_controller || !base_controller->ClassPrivateField() ||
+                !base_controller->ClassPrivateField()->IsChildOf(
+                    AShooterPlayerController::StaticClass()))
+            {
+                continue;
+            }
+
+            auto* controller = static_cast<AShooterPlayerController*>(base_controller);
+            AShooterCharacter* character = controller->GetPlayerCharacter();
+            if (!character)
+                continue;
+
+            ++players;
+
+            APawn* possessed = base_controller->GetPawnOrSpectator();
+            if (possessed && possessed != character)
+            {
+                const BuffClassInfo info = GetBuffClassInfo(possessed->ClassPrivateField());
+                Log::GetLog()->info(
+                    "Player possessed pawn: class='{}', path='{}'",
+                    info.name, info.path);
+                response << "Possessed: " << info.name;
+            }
+            else
+            {
+                response << "Possessed: self (on foot)";
+            }
+
+            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
+            if (mount)
+            {
+                const BuffClassInfo info = GetBuffClassInfo(mount->ClassPrivateField());
+                Log::GetLog()->info(
+                    "Player mounted dino: class='{}', path='{}'",
+                    info.name, info.path);
+                response << " | Mount: " << info.name;
+            }
+
+            response << "\n";
+        }
+
+        if (players == 0)
+            response << "No players online.";
+
         SendRconReply(connection, packet, response.str());
     }
 }
@@ -801,20 +891,34 @@ void TickSweep(float)
         auto* controller = static_cast<AShooterPlayerController*>(base_controller);
         AShooterCharacter* character = controller->GetPlayerCharacter();
 
-        // Determine whether the player is riding something (vehicle or dino).
+        // Check if the player is on a configured vehicle (e.g. TEK Hover Skiff).
+        // Mounted-only cleanup buffs are only swept when on one of these vehicles,
+        // so riding a megalodon in the ocean keeps the full ocean buff package.
         APawn* possessed = base_controller->GetPawnOrSpectator();
-        APrimalDinoCharacter* mount = character
-            ? character->MountedDinoField().Get() : nullptr;
-        const bool is_riding = (possessed && possessed != character) || mount;
+        bool on_vehicle = false;
+        if (possessed && possessed != character &&
+            !settings->vehicle_class_names.empty())
+        {
+            UClass* pawn_class = possessed->ClassPrivateField();
+            if (pawn_class)
+            {
+                const FName pawn_name = pawn_class->NamePrivateField();
+                for (const FName& vehicle : settings->vehicle_class_names)
+                {
+                    if (pawn_name == vehicle)
+                    {
+                        on_vehicle = true;
+                        break;
+                    }
+                }
+            }
+        }
 
-        // Always sweep standard cleanup buffs from the player character.
-        // Only sweep mounted-only cleanup buffs (e.g. ocean zone debuff)
-        // when the player is riding — swimming players keep those buffs.
         if (character)
         {
             DeactivateMatchingBuffsOnCharacter(
                 character, settings->exact_cleanup_class_names);
-            if (is_riding)
+            if (on_vehicle)
             {
                 DeactivateMatchingBuffsOnCharacter(
                     character, settings->mounted_only_cleanup_class_names);
@@ -890,6 +994,9 @@ extern "C" __declspec(dllexport) void Plugin_Init()
         BuildFastClassNames(
             defaults.mounted_only_cleanup_class_names_or_paths,
             defaults.mounted_only_cleanup_class_names);
+        BuildFastClassNames(
+            defaults.vehicle_class_names_or_paths,
+            defaults.vehicle_class_names);
         std::atomic_store_explicit(
             &g_settings,
             std::make_shared<const Settings>(std::move(defaults)),
@@ -935,6 +1042,7 @@ extern "C" __declspec(dllexport) void Plugin_Init()
     g_operational.store(true, std::memory_order_release);
     AsaApi::GetCommands().AddRconCommand("GWH.Reload", ReloadRcon);
     AsaApi::GetCommands().AddRconCommand("GWH.DumpBuffs", DumpBuffsRcon);
+    AsaApi::GetCommands().AddRconCommand("GWH.DumpPawn", DumpPawnRcon);
 
     if (AsaApi::GetApiUtils().GetStatus() == AsaApi::ServerStatus::Ready)
     {
@@ -955,6 +1063,7 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
     AsaApi::GetCommands().RemoveRconCommand("GWH.Reload");
     AsaApi::GetCommands().RemoveRconCommand("GWH.Status");
     AsaApi::GetCommands().RemoveRconCommand("GWH.DumpBuffs");
+    AsaApi::GetCommands().RemoveRconCommand("GWH.DumpPawn");
 
     if (g_add_buff_hooked)
     {

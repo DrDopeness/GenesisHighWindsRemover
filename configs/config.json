@@ -13,6 +13,9 @@
   "MountedOnlyCleanupClassNamesOrPaths": [
     "Gen_AreaBuff_Ocean_C"
   ],
+  "VehicleClassNames": [
+    "HoverSkiff_Character_BP_C"
+  ],
   "NormalizedBlockedClassNameContains": [],
   "SweepExistingPlayerBuffs": true,
   "LogFirstBlockedClass": true,
