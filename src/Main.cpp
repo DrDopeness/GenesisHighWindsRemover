@@ -32,6 +32,7 @@ namespace
         std::vector<std::string> allowed_maps;
         std::vector<std::string> exact_blocked_class_names_or_paths;
         std::vector<std::string> exact_cleanup_class_names_or_paths;
+        std::vector<std::string> mounted_only_cleanup_class_names_or_paths;
         std::vector<std::string> normalized_blocked_class_name_contains;
         std::vector<std::string> discovery_normalized_name_contains;
 
@@ -39,6 +40,7 @@ namespace
         // once. The AddBuff hot path can then compare FNames without allocating.
         std::vector<FName> exact_blocked_class_names;
         std::vector<FName> exact_cleanup_class_names;
+        std::vector<FName> mounted_only_cleanup_class_names;
     };
 
     struct BuffClassInfo
@@ -191,6 +193,10 @@ namespace
             root,
             "ExactCleanupClassNamesOrPaths",
             settings.exact_cleanup_class_names_or_paths);
+        settings.mounted_only_cleanup_class_names_or_paths = ReadStringArray(
+            root,
+            "MountedOnlyCleanupClassNamesOrPaths",
+            settings.mounted_only_cleanup_class_names_or_paths);
         settings.normalized_blocked_class_name_contains = ReadStringArray(
             root,
             "NormalizedBlockedClassNameContains",
@@ -204,10 +210,12 @@ namespace
             throw std::runtime_error("AllowedMaps must contain at least one map name");
 
         if (settings.exact_blocked_class_names_or_paths.empty() &&
-            settings.normalized_blocked_class_name_contains.empty())
+            settings.normalized_blocked_class_name_contains.empty() &&
+            settings.exact_cleanup_class_names_or_paths.empty() &&
+            settings.mounted_only_cleanup_class_names_or_paths.empty())
         {
             throw std::runtime_error(
-                "At least one exact class or normalized class-name matcher is required");
+                "At least one block or cleanup class matcher is required");
         }
 
         if (settings.exact_cleanup_class_names_or_paths.empty())
@@ -220,6 +228,9 @@ namespace
         BuildFastClassNames(
             settings.exact_cleanup_class_names_or_paths,
             settings.exact_cleanup_class_names);
+        BuildFastClassNames(
+            settings.mounted_only_cleanup_class_names_or_paths,
+            settings.mounted_only_cleanup_class_names);
         return settings;
     }
 
@@ -414,21 +425,18 @@ namespace
 
     std::uint64_t DeactivateMatchingBuffsOnCharacter(
         APrimalCharacter* character,
-        const Settings& settings)
+        const std::vector<FName>& cleanup_names)
     {
-        if (!character)
+        if (!character || cleanup_names.empty())
             return 0;
 
-        // Deactivate() can mutate the live Buffs array, so collect matches from
-        // a copy before removing them. This clears an already-active skiff wind
-        // debuff when the environmental system next attempts to reapply it.
         const auto buffs = character->BuffsField();
         std::vector<APrimalBuff*> matches;
         for (APrimalBuff* buff : buffs)
         {
             if (buff && MatchesExactClass(
                     buff->ClassPrivateField(),
-                    settings.exact_cleanup_class_names))
+                    cleanup_names))
             {
                 matches.push_back(buff);
             }
@@ -563,28 +571,24 @@ namespace
 
             ++result.players;
 
-            // Deactivate() can mutate the live Buffs array. Identify every exact
-            // cleanup match from a copy before removing any instance.
+            APawn* possessed = base_controller->GetPawnOrSpectator();
+            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
+            const bool is_riding = (possessed && possessed != character) || mount;
+
             const auto buffs = character->BuffsField();
-            std::vector<APrimalBuff*> cleanup_buffs;
             for (APrimalBuff* buff : buffs)
             {
                 if (!buff)
                     continue;
-
                 ++result.buffs_scanned;
-                if (MatchesExactClass(
-                        buff->ClassPrivateField(),
-                        settings->exact_cleanup_class_names))
-                {
-                    cleanup_buffs.push_back(buff);
-                }
             }
 
-            for (APrimalBuff* buff : cleanup_buffs)
+            result.buffs_deactivated += DeactivateMatchingBuffsOnCharacter(
+                character, settings->exact_cleanup_class_names);
+            if (is_riding)
             {
-                buff->Deactivate();
-                ++result.buffs_deactivated;
+                result.buffs_deactivated += DeactivateMatchingBuffsOnCharacter(
+                    character, settings->mounted_only_cleanup_class_names);
             }
         }
 
@@ -665,6 +669,8 @@ namespace
                  << (settings ? settings->exact_blocked_class_names.size() : 0)
                  << ", exactCleanupTargets="
                  << (settings ? settings->exact_cleanup_class_names.size() : 0)
+                 << ", mountedOnlyCleanupTargets="
+                 << (settings ? settings->mounted_only_cleanup_class_names.size() : 0)
                  << ", AsaApi=" << AsaApi::Tools::GetApiVersion();
 
         SendRconReply(connection, packet, response.str());
@@ -795,30 +801,45 @@ void TickSweep(float)
         auto* controller = static_cast<AShooterPlayerController*>(base_controller);
         AShooterCharacter* character = controller->GetPlayerCharacter();
 
-        // Sweep the player character
+        // Determine whether the player is riding something (vehicle or dino).
+        APawn* possessed = base_controller->GetPawnOrSpectator();
+        APrimalDinoCharacter* mount = character
+            ? character->MountedDinoField().Get() : nullptr;
+        const bool is_riding = (possessed && possessed != character) || mount;
+
+        // Always sweep standard cleanup buffs from the player character.
+        // Only sweep mounted-only cleanup buffs (e.g. ocean zone debuff)
+        // when the player is riding — swimming players keep those buffs.
         if (character)
-            DeactivateMatchingBuffsOnCharacter(character, *settings);
+        {
+            DeactivateMatchingBuffsOnCharacter(
+                character, settings->exact_cleanup_class_names);
+            if (is_riding)
+            {
+                DeactivateMatchingBuffsOnCharacter(
+                    character, settings->mounted_only_cleanup_class_names);
+            }
+        }
 
         // Sweep whatever the player is riding. For vehicles like the TEK
         // Hover Skiff the controller possesses the vehicle directly, so
         // GetPawnOrSpectator returns the skiff rather than the player.
-        APawn* possessed = base_controller->GetPawnOrSpectator();
         if (possessed && possessed != character)
         {
             UClass* pawn_class = possessed->ClassPrivateField();
             if (pawn_class && pawn_class->IsChildOf(APrimalCharacter::StaticClass()))
             {
                 DeactivateMatchingBuffsOnCharacter(
-                    static_cast<APrimalCharacter*>(possessed), *settings);
+                    static_cast<APrimalCharacter*>(possessed),
+                    settings->exact_cleanup_class_names);
             }
         }
 
         // Also check MountedDino for traditional dino riding
-        if (character)
+        if (mount && mount != possessed)
         {
-            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
-            if (mount && mount != possessed)
-                DeactivateMatchingBuffsOnCharacter(mount, *settings);
+            DeactivateMatchingBuffsOnCharacter(
+                mount, settings->exact_cleanup_class_names);
         }
     }
 }
@@ -866,6 +887,9 @@ extern "C" __declspec(dllexport) void Plugin_Init()
         BuildFastClassNames(
             defaults.exact_cleanup_class_names_or_paths,
             defaults.exact_cleanup_class_names);
+        BuildFastClassNames(
+            defaults.mounted_only_cleanup_class_names_or_paths,
+            defaults.mounted_only_cleanup_class_names);
         std::atomic_store_explicit(
             &g_settings,
             std::make_shared<const Settings>(std::move(defaults)),

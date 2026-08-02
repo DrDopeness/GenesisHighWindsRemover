@@ -10,6 +10,9 @@
   "ExactCleanupClassNamesOrPaths": [
     "Buff_SkiffBuffetedByWind_C"
   ],
+  "MountedOnlyCleanupClassNamesOrPaths": [
+    "Gen_AreaBuff_Ocean_C"
+  ],
   "NormalizedBlockedClassNameContains": [],
   "SweepExistingPlayerBuffs": true,
   "LogFirstBlockedClass": true,
@@ -17,6 +20,7 @@
   "DiscoveryNormalizedNameContains": [
     "skiffbuffetedbywind",
     "buffetedbywind",
-    "wind"
+    "wind",
+    "ocean"
   ]
 }
