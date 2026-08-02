@@ -1,0 +1,63 @@
+name: Build plugin
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "configs/**"
+      - "scripts/**"
+      - "*.sln"
+      - "*.vcxproj"
+      - "vcpkg*.json"
+      - "vcpkg_custom_triplets/**"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install MSVC 14.39 toolset
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $installPath = (& $vswhere -latest -products * -property installationPath).Trim()
+          if (-not $installPath -or -not (Test-Path $setup)) {
+            throw "Could not locate the Visual Studio 2022 installation or installer."
+          }
+
+          $arguments = "modify --installPath `"$installPath`" " +
+            "--add Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64 " +
+            "--quiet --norestart"
+          $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -notin 0, 3010) {
+            throw "Visual Studio Installer failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Prepare AsaApi 2.03
+        shell: pwsh
+        run: ./scripts/Prepare-AsaApi.ps1
+
+      - name: Enable vcpkg integration
+        shell: pwsh
+        run: vcpkg integrate install
+
+      - name: Build Release x64
+        shell: pwsh
+        run: msbuild GenesisHighWindsRemover.sln /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Upload deployable plugin folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: GenesisHighWindsRemover-1.0.0
+          path: out/GenesisHighWindsRemover/
+          if-no-files-found: error
