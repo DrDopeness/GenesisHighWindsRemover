@@ -14,7 +14,7 @@
     "Gen_AreaBuff_Ocean_C"
   ],
   "VehicleClassNames": [
-    "HoverSkiff_Character_BP_C"
+    "TekHoverSkiff_Character_BP_C"
   ],
   "NormalizedBlockedClassNameContains": [],
   "SweepExistingPlayerBuffs": true,
