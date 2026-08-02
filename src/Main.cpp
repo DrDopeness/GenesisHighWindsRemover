@@ -71,6 +71,13 @@ namespace
     bool g_add_buff_hooked = false;
     bool g_begin_play_hooked = false;
 
+    // Pre-resolved UClass pointers for blocked buffs. Compared by pointer
+    // in the AddBuff hook so the hot path does zero string work and never
+    // touches for_character (which may be partially constructed during
+    // zone transitions).
+    std::mutex g_class_cache_mutex;
+    std::vector<UClass*> g_cached_blocked_classes;
+
     std::mutex g_state_mutex;
     std::string g_current_map = "<not ready>";
 
@@ -438,6 +445,91 @@ namespace
         return matches.size();
     }
 
+    void RebuildClassCache()
+    {
+        const std::shared_ptr<const Settings> settings = GetSettings();
+        if (!settings)
+            return;
+
+        std::vector<UClass*> resolved;
+        for (const FName& class_name : settings->exact_blocked_class_names)
+        {
+            // Walk all UClass objects to find a match by FName.
+            // This runs only on BeginPlay / Reload, never in the hot path.
+            UWorld* world = AsaApi::GetApiUtils().GetWorld();
+            if (!world)
+                break;
+
+            const auto& controllers = world->PlayerControllerListField();
+            for (TWeakObjectPtr<APlayerController> weak : controllers)
+            {
+                APlayerController* ctrl = weak.Get();
+                if (!ctrl)
+                    continue;
+
+                UClass* ctrl_class = ctrl->ClassPrivateField();
+                if (!ctrl_class || !ctrl_class->IsChildOf(
+                        AShooterPlayerController::StaticClass()))
+                    continue;
+
+                auto* sc = static_cast<AShooterPlayerController*>(ctrl);
+                AShooterCharacter* ch = sc->GetPlayerCharacter();
+                if (!ch)
+                    continue;
+
+                const auto buffs = ch->BuffsField();
+                for (APrimalBuff* buff : buffs)
+                {
+                    if (!buff)
+                        continue;
+                    UClass* bc = buff->ClassPrivateField();
+                    if (bc && bc->NamePrivateField() == class_name)
+                    {
+                        bool already = false;
+                        for (UClass* r : resolved)
+                            if (r == bc) { already = true; break; }
+                        if (!already)
+                            resolved.push_back(bc);
+                    }
+                }
+
+                // Also check the possessed pawn (skiff etc.)
+                APawn* pawn = ctrl->GetPawnOrSpectator();
+                if (pawn && pawn != ch)
+                {
+                    UClass* pc = pawn->ClassPrivateField();
+                    if (pc && pc->IsChildOf(APrimalCharacter::StaticClass()))
+                    {
+                        auto* mount = static_cast<APrimalCharacter*>(pawn);
+                        const auto mount_buffs = mount->BuffsField();
+                        for (APrimalBuff* buff : mount_buffs)
+                        {
+                            if (!buff)
+                                continue;
+                            UClass* bc = buff->ClassPrivateField();
+                            if (bc && bc->NamePrivateField() == class_name)
+                            {
+                                bool already = false;
+                                for (UClass* r : resolved)
+                                    if (r == bc) { already = true; break; }
+                                if (!already)
+                                    resolved.push_back(bc);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_class_cache_mutex);
+            g_cached_blocked_classes = std::move(resolved);
+        }
+
+        Log::GetLog()->info("Class cache: resolved {} blocked UClass pointer(s)",
+            g_cached_blocked_classes.size());
+    }
+
     SweepResult SweepExistingPlayerBuffs()
     {
         SweepResult result;
@@ -535,6 +627,7 @@ namespace
 
             g_map_state.store(MapState::Unknown, std::memory_order_release);
             RefreshMapState(nullptr, true);
+            RebuildClassCache();
             const SweepResult sweep = SweepExistingPlayerBuffs();
 
             std::ostringstream response;
@@ -647,10 +740,31 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     APrimalCharacter* for_character,
     AActor* damage_causer)
 {
-    // Pure passthrough. All buff removal is handled by the tick sweep.
-    // Accessing fields on buff_template, for_character, or the result inside
-    // this hook crashes during zone transitions because UObjects may be
-    // partially constructed.
+    // Only compare the buff template's UClass* pointer against pre-resolved
+    // cached pointers. The CDO (buff_template) is always fully constructed
+    // so ClassPrivateField() is safe. We never touch for_character, never
+    // call GetSettings(), never do string work — those crash during zone
+    // transitions when UObjects are partially constructed.
+    if (buff_template)
+    {
+        UClass* buff_class = buff_template->ClassPrivateField();
+        if (buff_class)
+        {
+            std::lock_guard<std::mutex> lock(g_class_cache_mutex);
+            for (UClass* blocked : g_cached_blocked_classes)
+            {
+                if (buff_class == blocked)
+                {
+                    g_blocked_total.fetch_add(1, std::memory_order_relaxed);
+                    // Skip calling the original — the buff is never created.
+                    // Return the CDO (buff_template) instead of nullptr so
+                    // the caller has a valid pointer and won't null-deref.
+                    return buff_template;
+                }
+            }
+        }
+    }
+
     return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
 }
 
@@ -723,6 +837,7 @@ void Hook_AShooterGameMode_BeginPlay(AShooterGameMode* game_mode)
     // original function cannot slip through while map identity is still unknown.
     RefreshMapState(game_mode, true);
     AShooterGameMode_BeginPlay_original(game_mode);
+    RebuildClassCache();
     SweepExistingPlayerBuffs();
 }
 
