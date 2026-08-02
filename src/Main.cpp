@@ -649,43 +649,8 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     APrimalCharacter* for_character,
     AActor* damage_causer)
 {
-    // Always let the original create the buff. Returning nullptr or calling
-    // Deactivate() inside this call chain crashes the server because the
-    // buff is not yet fully initialized when this hook returns.
-    APrimalBuff* result = APrimalBuff_AddBuff_original(
-        buff_template, for_character, damage_causer);
-
-    if (!result ||
-        !g_operational.load(std::memory_order_acquire) ||
-        !IsActiveMap())
-    {
-        return result;
-    }
-
-    const std::shared_ptr<const Settings> settings = GetSettings();
-    if (!settings || !settings->enabled)
-        return result;
-
-    if (!IsEligibleCharacter(for_character, *settings))
-        return result;
-
-    UClass* buff_class = result->ClassPrivateField();
-    if (!buff_class)
-        return result;
-
-    if (MatchesBlockedBuffClass(buff_class, *settings))
-    {
-        g_blocked_total.fetch_add(1, std::memory_order_relaxed);
-        LogFirstBlockedClass(buff_class, *settings);
-
-        // Queue for deferred removal on the next game tick.
-        std::lock_guard<std::mutex> lock(g_deferred_mutex);
-        g_deferred_removals.push_back(result);
-        return result;
-    }
-
-    MaybeLogDiscoveryCandidate(buff_class, *settings);
-    return result;
+    // Diagnostic passthrough — does the hook mechanism itself crash?
+    return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
 }
 
 void ProcessDeferredRemovals(float)
