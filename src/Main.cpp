@@ -77,6 +77,9 @@ namespace
     std::mutex g_discovery_mutex;
     std::unordered_set<std::string> g_logged_discovery_classes;
 
+    std::mutex g_deferred_mutex;
+    std::vector<APrimalBuff*> g_deferred_removals;
+
     Settings DefaultSettings()
     {
         Settings settings;
@@ -641,60 +644,67 @@ DECLARE_HOOK(
     APrimalCharacter*,
     AActor*);
 
-APrimalBuff* Hook_APrimalBuff_AddBuff_Inner(
+APrimalBuff* Hook_APrimalBuff_AddBuff(
     APrimalBuff* buff_template,
     APrimalCharacter* for_character,
     AActor* damage_causer)
 {
-    const std::shared_ptr<const Settings> settings = GetSettings();
-    if (!g_operational.load(std::memory_order_acquire) ||
-        !settings || !settings->enabled || !IsActiveMap() ||
-        !buff_template || !for_character)
+    // Always let the original create the buff. Returning nullptr or calling
+    // Deactivate() inside this call chain crashes the server because the
+    // buff is not yet fully initialized when this hook returns.
+    APrimalBuff* result = APrimalBuff_AddBuff_original(
+        buff_template, for_character, damage_causer);
+
+    if (!result ||
+        !g_operational.load(std::memory_order_acquire) ||
+        !IsActiveMap())
     {
-        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+        return result;
     }
 
-    if (!IsEligibleCharacter(for_character, *settings))
-        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+    const std::shared_ptr<const Settings> settings = GetSettings();
+    if (!settings || !settings->enabled)
+        return result;
 
-    UClass* buff_class = buff_template->ClassPrivateField();
+    if (!IsEligibleCharacter(for_character, *settings))
+        return result;
+
+    UClass* buff_class = result->ClassPrivateField();
     if (!buff_class)
-        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+        return result;
 
     if (MatchesBlockedBuffClass(buff_class, *settings))
     {
         g_blocked_total.fetch_add(1, std::memory_order_relaxed);
         LogFirstBlockedClass(buff_class, *settings);
 
-        // Let the buff be created normally so the caller gets a valid pointer,
-        // then immediately deactivate it. Returning nullptr crashes the game
-        // because the caller dereferences the result without a null check.
-        APrimalBuff* created = APrimalBuff_AddBuff_original(
-            buff_template, for_character, damage_causer);
-        if (created)
-            created->Deactivate();
-
-        return created;
+        // Queue for deferred removal on the next game tick.
+        std::lock_guard<std::mutex> lock(g_deferred_mutex);
+        g_deferred_removals.push_back(result);
+        return result;
     }
 
     MaybeLogDiscoveryCandidate(buff_class, *settings);
-    return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+    return result;
 }
 
-APrimalBuff* Hook_APrimalBuff_AddBuff(
-    APrimalBuff* buff_template,
-    APrimalCharacter* for_character,
-    AActor* damage_causer)
+void ProcessDeferredRemovals(float)
 {
-    __try
+    std::vector<APrimalBuff*> pending;
     {
-        return Hook_APrimalBuff_AddBuff_Inner(buff_template, for_character, damage_causer);
+        std::lock_guard<std::mutex> lock(g_deferred_mutex);
+        if (g_deferred_removals.empty())
+            return;
+        pending.swap(g_deferred_removals);
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    for (APrimalBuff* buff : pending)
     {
-        // During cluster transfers the buff or character may be partially
-        // constructed. Fall through to the original so the transfer completes.
-        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+        if (buff)
+        {
+            buff->Deactivate();
+            g_deactivated_total.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -756,6 +766,7 @@ extern "C" __declspec(dllexport) void Plugin_Init()
         &AShooterGameMode_BeginPlay_original);
 
     AsaApi::GetCommands().AddRconCommand("GWH.Status", StatusRcon);
+    AsaApi::GetCommands().AddOnTickCallback("GWH.Tick", ProcessDeferredRemovals);
 
     if (!g_add_buff_hooked || !g_begin_play_hooked)
     {
@@ -800,6 +811,7 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
 {
     g_operational.store(false, std::memory_order_release);
 
+    AsaApi::GetCommands().RemoveOnTickCallback("GWH.Tick");
     AsaApi::GetCommands().RemoveRconCommand("GWH.Reload");
     AsaApi::GetCommands().RemoveRconCommand("GWH.Status");
     AsaApi::GetCommands().RemoveRconCommand("GWH.DumpBuffs");
