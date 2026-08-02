@@ -686,16 +686,11 @@ void TickSweep(float)
             DeactivateMatchingBuffsOnCharacter(character, *settings);
 
         // Sweep whatever the player is riding (e.g. TEK Hover Skiff)
-        APawn* pawn = controller->GetPawn();
-        if (pawn && pawn != character)
+        if (character)
         {
-            UClass* pawn_class = pawn->ClassPrivateField();
-            if (pawn_class && pawn_class->IsChildOf(APrimalCharacter::StaticClass()))
-            {
-                DeactivateMatchingBuffsOnCharacter(
-                    static_cast<APrimalCharacter*>(pawn),
-                    *settings);
-            }
+            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
+            if (mount)
+                DeactivateMatchingBuffsOnCharacter(mount, *settings);
         }
     }
 }
