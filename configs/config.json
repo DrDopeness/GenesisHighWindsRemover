@@ -1,0 +1,26 @@
+{
+  "Enabled": true,
+  "AllowedMaps": [
+    "Genesis_WP"
+  ],
+  "PlayersOnly": false,
+  "ExactBlockedClassNamesOrPaths": [
+    "Gen_AreaBuff_Arctic_C",
+    "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/Gen_AreaBuff_Arctic.Gen_AreaBuff_Arctic_C"
+  ],
+  "ExactCleanupClassNamesOrPaths": [
+    "Gen_AreaBuff_Arctic_C",
+    "ArcticBlizzard_High_C",
+    "ArcticBlizzard_Med_C",
+    "ArcticBlizzard_Low_C",
+    "/Game/Genesis/CoreBlueprints/Buffs/AreaBuffs/ArcticSubBuffs/ArcticBlizzard_High.ArcticBlizzard_High_C"
+  ],
+  "NormalizedBlockedClassNameContains": [],
+  "SweepExistingPlayerBuffs": true,
+  "LogFirstBlockedClass": true,
+  "LogUnmatchedDiscoveryCandidates": false,
+  "DiscoveryNormalizedNameContains": [
+    "wind",
+    "blizzard"
+  ]
+}
