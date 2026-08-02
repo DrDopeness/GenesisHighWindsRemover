@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{42696DD5-A483-4F20-92B9-23FC4B5BBE14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{1C7E80AC-E0B5-450B-A8CE-80B9705DFB14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Configuration">
+      <UniqueIdentifier>{5E387D8F-17F3-4E22-9D04-47287E044DE8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Matching.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Matching.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="configs\config.json">
+      <Filter>Configuration</Filter>
+    </None>
+    <None Include="configs\config.status-only.json">
+      <Filter>Configuration</Filter>
+    </None>
+    <None Include="configs\PluginInfo.json">
+      <Filter>Configuration</Filter>
+    </None>
+    <None Include="vcpkg.json">
+      <Filter>Configuration</Filter>
+    </None>
+    <None Include="vcpkg-configuration.json">
+      <Filter>Configuration</Filter>
+    </None>
+    <None Include="vcpkg_custom_triplets\x64-windows-1439-static-md.cmake">
+      <Filter>Configuration</Filter>
+    </None>
+  </ItemGroup>
+</Project>
