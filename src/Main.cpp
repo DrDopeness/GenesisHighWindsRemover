@@ -685,11 +685,25 @@ void TickSweep(float)
         if (character)
             DeactivateMatchingBuffsOnCharacter(character, *settings);
 
-        // Sweep whatever the player is riding (e.g. TEK Hover Skiff)
+        // Sweep whatever the player is riding. For vehicles like the TEK
+        // Hover Skiff the controller possesses the vehicle directly, so
+        // GetPawnOrSpectator returns the skiff rather than the player.
+        APawn* possessed = base_controller->GetPawnOrSpectator();
+        if (possessed && possessed != character)
+        {
+            UClass* pawn_class = possessed->ClassPrivateField();
+            if (pawn_class && pawn_class->IsChildOf(APrimalCharacter::StaticClass()))
+            {
+                DeactivateMatchingBuffsOnCharacter(
+                    static_cast<APrimalCharacter*>(possessed), *settings);
+            }
+        }
+
+        // Also check MountedDino for traditional dino riding
         if (character)
         {
             APrimalDinoCharacter* mount = character->MountedDinoField().Get();
-            if (mount)
+            if (mount && mount != possessed)
                 DeactivateMatchingBuffsOnCharacter(mount, *settings);
         }
     }
