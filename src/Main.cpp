@@ -77,8 +77,6 @@ namespace
     std::mutex g_discovery_mutex;
     std::unordered_set<std::string> g_logged_discovery_classes;
 
-    std::mutex g_deferred_mutex;
-    std::vector<APrimalBuff*> g_deferred_removals;
 
     Settings DefaultSettings()
     {
@@ -649,26 +647,55 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     APrimalCharacter* for_character,
     AActor* damage_causer)
 {
-    // Diagnostic passthrough — does the hook mechanism itself crash?
+    // Pure passthrough. All buff removal is handled by the tick sweep.
+    // Accessing fields on buff_template, for_character, or the result inside
+    // this hook crashes during zone transitions because UObjects may be
+    // partially constructed.
     return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
 }
 
-void ProcessDeferredRemovals(float)
+void TickSweep(float)
 {
-    std::vector<APrimalBuff*> pending;
-    {
-        std::lock_guard<std::mutex> lock(g_deferred_mutex);
-        if (g_deferred_removals.empty())
-            return;
-        pending.swap(g_deferred_removals);
-    }
+    if (!g_operational.load(std::memory_order_acquire) || !IsActiveMap())
+        return;
 
-    for (APrimalBuff* buff : pending)
+    const std::shared_ptr<const Settings> settings = GetSettings();
+    if (!settings || !settings->enabled || !settings->sweep_existing_player_buffs)
+        return;
+
+    UWorld* world = AsaApi::GetApiUtils().GetWorld();
+    if (!world)
+        return;
+
+    const auto& controllers = world->PlayerControllerListField();
+    for (TWeakObjectPtr<APlayerController> weak_controller : controllers)
     {
-        if (buff)
+        APlayerController* base_controller = weak_controller.Get();
+        if (!base_controller)
+            continue;
+
+        UClass* ctrl_class = base_controller->ClassPrivateField();
+        if (!ctrl_class || !ctrl_class->IsChildOf(AShooterPlayerController::StaticClass()))
+            continue;
+
+        auto* controller = static_cast<AShooterPlayerController*>(base_controller);
+        AShooterCharacter* character = controller->GetPlayerCharacter();
+
+        // Sweep the player character
+        if (character)
+            DeactivateMatchingBuffsOnCharacter(character, *settings);
+
+        // Sweep whatever the player is riding (e.g. TEK Hover Skiff)
+        APawn* pawn = controller->GetPawn();
+        if (pawn && pawn != character)
         {
-            buff->Deactivate();
-            g_deactivated_total.fetch_add(1, std::memory_order_relaxed);
+            UClass* pawn_class = pawn->ClassPrivateField();
+            if (pawn_class && pawn_class->IsChildOf(APrimalCharacter::StaticClass()))
+            {
+                DeactivateMatchingBuffsOnCharacter(
+                    static_cast<APrimalCharacter*>(pawn),
+                    *settings);
+            }
         }
     }
 }
@@ -731,7 +758,7 @@ extern "C" __declspec(dllexport) void Plugin_Init()
         &AShooterGameMode_BeginPlay_original);
 
     AsaApi::GetCommands().AddRconCommand("GWH.Status", StatusRcon);
-    AsaApi::GetCommands().AddOnTickCallback("GWH.Tick", ProcessDeferredRemovals);
+    AsaApi::GetCommands().AddOnTickCallback("GWH.Tick", TickSweep);
 
     if (!g_add_buff_hooked || !g_begin_play_hooked)
     {
