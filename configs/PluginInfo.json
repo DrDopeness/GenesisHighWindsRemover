@@ -1,0 +1,7 @@
+{
+  "FullName": "Genesis High Winds Remover",
+  "Description": "Disables the Genesis 1 Arctic blizzard controller, with an included status-only profile.",
+  "Version": 1.0,
+  "MinApiVersion": 2.03,
+  "Dependencies": []
+}
