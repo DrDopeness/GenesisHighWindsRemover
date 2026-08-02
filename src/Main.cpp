@@ -641,7 +641,7 @@ DECLARE_HOOK(
     APrimalCharacter*,
     AActor*);
 
-APrimalBuff* Hook_APrimalBuff_AddBuff(
+APrimalBuff* Hook_APrimalBuff_AddBuff_Inner(
     APrimalBuff* buff_template,
     APrimalCharacter* for_character,
     AActor* damage_causer)
@@ -649,12 +649,18 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     const std::shared_ptr<const Settings> settings = GetSettings();
     if (!g_operational.load(std::memory_order_acquire) ||
         !settings || !settings->enabled || !IsActiveMap() ||
-        !IsEligibleCharacter(for_character, *settings) || !buff_template)
+        !buff_template || !for_character)
     {
         return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
     }
 
+    if (!IsEligibleCharacter(for_character, *settings))
+        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+
     UClass* buff_class = buff_template->ClassPrivateField();
+    if (!buff_class)
+        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+
     if (MatchesBlockedBuffClass(buff_class, *settings))
     {
         g_blocked_total.fetch_add(1, std::memory_order_relaxed);
@@ -674,6 +680,23 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
 
     MaybeLogDiscoveryCandidate(buff_class, *settings);
     return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+}
+
+APrimalBuff* Hook_APrimalBuff_AddBuff(
+    APrimalBuff* buff_template,
+    APrimalCharacter* for_character,
+    AActor* damage_causer)
+{
+    __try
+    {
+        return Hook_APrimalBuff_AddBuff_Inner(buff_template, for_character, damage_causer);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        // During cluster transfers the buff or character may be partially
+        // constructed. Fall through to the original so the transfer completes.
+        return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+    }
 }
 
 DECLARE_HOOK(AShooterGameMode_BeginPlay, void, AShooterGameMode*);
