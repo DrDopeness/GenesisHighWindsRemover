@@ -940,10 +940,14 @@ void TickSweep(float)
         }
 
         // Also check MountedDino for traditional dino riding
-        if (mount && mount != possessed)
+        if (character)
         {
-            DeactivateMatchingBuffsOnCharacter(
-                mount, settings->exact_cleanup_class_names);
+            APrimalDinoCharacter* mount = character->MountedDinoField().Get();
+            if (mount && mount != possessed)
+            {
+                DeactivateMatchingBuffsOnCharacter(
+                    mount, settings->exact_cleanup_class_names);
+            }
         }
     }
 }
