@@ -666,16 +666,15 @@ APrimalBuff* Hook_APrimalBuff_AddBuff_Inner(
         g_blocked_total.fetch_add(1, std::memory_order_relaxed);
         LogFirstBlockedClass(buff_class, *settings);
 
-        const std::uint64_t deactivated =
-            DeactivateMatchingBuffsOnCharacter(for_character, *settings);
-        if (deactivated > 0)
-        {
-            Log::GetLog()->info(
-                "Deactivated {} existing TEK Hover Skiff wind debuff instance(s) on the target",
-                deactivated);
-        }
+        // Let the buff be created normally so the caller gets a valid pointer,
+        // then immediately deactivate it. Returning nullptr crashes the game
+        // because the caller dereferences the result without a null check.
+        APrimalBuff* created = APrimalBuff_AddBuff_original(
+            buff_template, for_character, damage_causer);
+        if (created)
+            created->Deactivate();
 
-        return nullptr;
+        return created;
     }
 
     MaybeLogDiscoveryCandidate(buff_class, *settings);
