@@ -452,7 +452,7 @@ namespace
             return result;
 
         const auto& controllers = world->PlayerControllerListField();
-        for (const TWeakObjectPtr<APlayerController> weak_controller : controllers)
+        for (TWeakObjectPtr<APlayerController> weak_controller : controllers)
         {
             APlayerController* base_controller = weak_controller.Get();
             if (!base_controller || !base_controller->ClassPrivateField() ||
@@ -590,7 +590,7 @@ namespace
         std::unordered_set<std::string> unique_classes;
 
         const auto& controllers = world->PlayerControllerListField();
-        for (const TWeakObjectPtr<APlayerController> weak_controller : controllers)
+        for (TWeakObjectPtr<APlayerController> weak_controller : controllers)
         {
             APlayerController* base_controller = weak_controller.Get();
             if (!base_controller || !base_controller->ClassPrivateField() ||
