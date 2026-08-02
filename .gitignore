@@ -1,0 +1,7 @@
+.vs/
+build/
+extern/
+out/
+vcpkg_installed/
+*.user
+*.zip
