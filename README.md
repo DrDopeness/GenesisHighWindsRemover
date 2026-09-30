@@ -18,7 +18,9 @@ controller and is intentionally no longer blocked.
 ## What the plugin does
 
 - Activates only on `Genesis_WP` by default.
-- Hooks `APrimalBuff.AddBuff(APrimalCharacter*,AActor*)`.
+- Hooks `APrimalBuff.AddBuff(APrimalCharacter*,AActor*,TFunction<void(APrimalBuff*)>)`
+  first (ASA v94.7 / build 25636863) and falls back to
+  `APrimalBuff.AddBuff(APrimalCharacter*,AActor*)` on older builds.
 - Returns `nullptr` only when the incoming generated class is exactly
   `Buff_SkiffBuffetedByWind_C`.
 - If the target already has that debuff, safely deactivates the existing
@@ -102,7 +104,7 @@ server console for:
 
 | Command | Purpose |
 | --- | --- |
-| `GWH.Status` | Show map scope, block/deactivation counters, target counts, and AsaApi version. |
+| `GWH.Status` | Show map scope, `addBuffHook` signature, block/deactivation counters, target counts, and AsaApi version. |
 | `GWH.Reload` | Validate and reload `config.json`. |
 | `GWH.DumpBuffs` | Log unique active player buff classes and paths to the ArkApi log/server console. |
 
@@ -148,7 +150,8 @@ they could catch unrelated buffs.
 
 ## Verification and rollback
 
-1. Start Genesis 1 and run `GWH.Status`; `mapActive` should be `true`.
+1. Start Genesis 1 and run `GWH.Status`; `mapActive` should be `true` and
+   `addBuffHook` should name the hooked AddBuff signature.
 2. Fly a TEK Hover Skiff into the location that previously produced the
    Buffeted by Wind debuff.
 3. Confirm `blockedSinceLoad` increases and the skiff does not retain

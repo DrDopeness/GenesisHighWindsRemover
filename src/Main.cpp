@@ -18,7 +18,9 @@
 namespace
 {
     constexpr const char* kPluginName = "GenesisHighWindsRemover";
-    constexpr const char* kAddBuffHook = "APrimalBuff.AddBuff(APrimalCharacter*,AActor*)";
+    constexpr const char* kAddBuffHookOld = "APrimalBuff.AddBuff(APrimalCharacter*,AActor*)";
+    constexpr const char* kAddBuffHookNew =
+        "APrimalBuff.AddBuff(APrimalCharacter*,AActor*,TFunction<void__cdecl(APrimalBuff*))";
     constexpr const char* kBeginPlayHook = "AShooterGameMode.BeginPlay()";
 
     struct Settings
@@ -72,8 +74,30 @@ namespace
     std::atomic<bool> g_logged_first_block{ false };
     std::atomic<bool> g_operational{ false };
 
-    bool g_add_buff_hooked = false;
+    enum class AddBuffHook
+    {
+        None,
+        Old,
+        New
+    };
+
+    AddBuffHook g_add_buff_hook = AddBuffHook::None;
     bool g_begin_play_hooked = false;
+
+    const char* AddBuffHookLabel(AddBuffHook hook)
+    {
+        switch (hook)
+        {
+        case AddBuffHook::None:
+            return "none";
+        case AddBuffHook::Old:
+            return "old 2-arg (APrimalCharacter*,AActor*)";
+        case AddBuffHook::New:
+            return "new 3-arg (+TFunction callback, v94.7+)";
+        }
+
+        return "none";
+    }
 
     // Pre-resolved UClass pointers for blocked buffs. Compared by pointer
     // in the AddBuff hook so the hot path does zero string work and never
@@ -686,6 +710,7 @@ namespace
                  << (settings && settings->enabled ? "true" : "false")
                  << ", operational="
                  << (g_operational.load(std::memory_order_acquire) ? "true" : "false")
+                 << ", addBuffHook=" << AddBuffHookLabel(g_add_buff_hook)
                  << ", map=" << map_name
                  << ", mapActive=" << (state == MapState::Active ? "true" : "false")
                  << ", blockedSinceLoad=" << g_blocked_total.load(std::memory_order_relaxed)
@@ -822,6 +847,36 @@ namespace
 
         SendRconReply(connection, packet, response.str());
     }
+
+    bool ShouldBlockBuffTemplate(APrimalBuff* buff_template)
+    {
+        // Only compare the buff template's UClass* pointer against pre-resolved
+        // cached pointers. The CDO (buff_template) is always fully constructed
+        // so ClassPrivateField() is safe. We never touch for_character, never
+        // call GetSettings(), never do string work — those crash during zone
+        // transitions when UObjects are partially constructed.
+        if (buff_template)
+        {
+            UClass* buff_class = buff_template->ClassPrivateField();
+            if (buff_class)
+            {
+                std::lock_guard<std::mutex> lock(g_class_cache_mutex);
+                for (UClass* blocked : g_cached_blocked_classes)
+                {
+                    if (buff_class == blocked)
+                    {
+                        g_blocked_total.fetch_add(1, std::memory_order_relaxed);
+                        // Skip calling the original — the buff is never created.
+                        // Return the CDO (buff_template) instead of nullptr so
+                        // the caller has a valid pointer and won't null-deref.
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
 }
 
 DECLARE_HOOK(
@@ -836,32 +891,61 @@ APrimalBuff* Hook_APrimalBuff_AddBuff(
     APrimalCharacter* for_character,
     AActor* damage_causer)
 {
-    // Only compare the buff template's UClass* pointer against pre-resolved
-    // cached pointers. The CDO (buff_template) is always fully constructed
-    // so ClassPrivateField() is safe. We never touch for_character, never
-    // call GetSettings(), never do string work — those crash during zone
-    // transitions when UObjects are partially constructed.
-    if (buff_template)
-    {
-        UClass* buff_class = buff_template->ClassPrivateField();
-        if (buff_class)
-        {
-            std::lock_guard<std::mutex> lock(g_class_cache_mutex);
-            for (UClass* blocked : g_cached_blocked_classes)
-            {
-                if (buff_class == blocked)
-                {
-                    g_blocked_total.fetch_add(1, std::memory_order_relaxed);
-                    // Skip calling the original — the buff is never created.
-                    // Return the CDO (buff_template) instead of nullptr so
-                    // the caller has a valid pointer and won't null-deref.
-                    return buff_template;
-                }
-            }
-        }
-    }
+    if (ShouldBlockBuffTemplate(buff_template))
+        return buff_template;
 
     return APrimalBuff_AddBuff_original(buff_template, for_character, damage_causer);
+}
+
+// v94.7+ (build 25636863): AddBuff gained a TFunction<void(APrimalBuff*)> callback
+// parameter. MSVC x64 passes a by-value TFunction as a pointer to a caller-owned
+// temporary, and the callee destroys it, so we take it as an opaque pointer and
+// forward it unchanged; the original then owns and destroys it exactly as before.
+// On the blocked path the temporary is never destroyed (a callback with heap
+// storage leaks a few bytes per blocked call; accepted, QA-212).
+DECLARE_HOOK(
+    APrimalBuff_AddBuffWithCallback,
+    APrimalBuff*,
+    APrimalBuff*,
+    APrimalCharacter*,
+    AActor*,
+    void*);
+
+APrimalBuff* Hook_APrimalBuff_AddBuffWithCallback(
+    APrimalBuff* buff_template,
+    APrimalCharacter* for_character,
+    AActor* damage_causer,
+    void* on_buff_created)
+{
+    if (ShouldBlockBuffTemplate(buff_template))
+        return buff_template;
+
+    return APrimalBuff_AddBuffWithCallback_original(
+        buff_template,
+        for_character,
+        damage_causer,
+        on_buff_created);
+}
+
+namespace
+{
+    void DisableAddBuffHook()
+    {
+        if (g_add_buff_hook == AddBuffHook::New)
+        {
+            AsaApi::GetHooks().DisableHook(
+                kAddBuffHookNew,
+                Hook_APrimalBuff_AddBuffWithCallback);
+        }
+        else if (g_add_buff_hook == AddBuffHook::Old)
+        {
+            AsaApi::GetHooks().DisableHook(
+                kAddBuffHookOld,
+                Hook_APrimalBuff_AddBuff);
+        }
+
+        g_add_buff_hook = AddBuffHook::None;
+    }
 }
 
 void TickSweep(float)
@@ -1007,10 +1091,27 @@ extern "C" __declspec(dllexport) void Plugin_Init()
             std::memory_order_release);
     }
 
-    g_add_buff_hooked = AsaApi::GetHooks().SetHook(
-        kAddBuffHook,
-        Hook_APrimalBuff_AddBuff,
-        &APrimalBuff_AddBuff_original);
+    // Try the v94.7+ signature first, then the pre-v94.7 one. On each build exactly
+    // one of these exists, so AsaApi logs one harmless "[critical] Failed to get the
+    // offset" line for the other (HooksDoNotThrow=true).
+    if (AsaApi::GetHooks().SetHook(
+            kAddBuffHookNew,
+            Hook_APrimalBuff_AddBuffWithCallback,
+            &APrimalBuff_AddBuffWithCallback_original))
+        g_add_buff_hook = AddBuffHook::New;
+    else if (AsaApi::GetHooks().SetHook(
+            kAddBuffHookOld,
+            Hook_APrimalBuff_AddBuff,
+            &APrimalBuff_AddBuff_original))
+        g_add_buff_hook = AddBuffHook::Old;
+
+    if (g_add_buff_hook != AddBuffHook::None)
+    {
+        Log::GetLog()->info(
+            "AddBuff hook installed: {}",
+            AddBuffHookLabel(g_add_buff_hook));
+    }
+
     g_begin_play_hooked = AsaApi::GetHooks().SetHook(
         kBeginPlayHook,
         Hook_AShooterGameMode_BeginPlay,
@@ -1019,18 +1120,14 @@ extern "C" __declspec(dllexport) void Plugin_Init()
     AsaApi::GetCommands().AddRconCommand("GWH.Status", StatusRcon);
     AsaApi::GetCommands().AddOnTickCallback("GWH.Tick", TickSweep);
 
-    if (!g_add_buff_hooked || !g_begin_play_hooked)
+    if (g_add_buff_hook == AddBuffHook::None || !g_begin_play_hooked)
     {
         Log::GetLog()->error(
             "Required hook setup failed (AddBuff={}, BeginPlay={}); plugin is inactive",
-            g_add_buff_hooked,
+            AddBuffHookLabel(g_add_buff_hook),
             g_begin_play_hooked);
 
-        if (g_add_buff_hooked)
-        {
-            AsaApi::GetHooks().DisableHook(kAddBuffHook, Hook_APrimalBuff_AddBuff);
-            g_add_buff_hooked = false;
-        }
+        DisableAddBuffHook();
 
         if (g_begin_play_hooked)
         {
@@ -1055,8 +1152,9 @@ extern "C" __declspec(dllexport) void Plugin_Init()
     }
 
     Log::GetLog()->info(
-        "Loaded; targeting Buff_SkiffBuffetedByWind_C on Genesis_WP (AsaApi {})",
-        AsaApi::Tools::GetApiVersion());
+        "Loaded; targeting Buff_SkiffBuffetedByWind_C on Genesis_WP (AsaApi {}, AddBuff hook {})",
+        AsaApi::Tools::GetApiVersion(),
+        AddBuffHookLabel(g_add_buff_hook));
 }
 
 extern "C" __declspec(dllexport) void Plugin_Unload()
@@ -1069,11 +1167,7 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
     AsaApi::GetCommands().RemoveRconCommand("GWH.DumpBuffs");
     AsaApi::GetCommands().RemoveRconCommand("GWH.DumpPawn");
 
-    if (g_add_buff_hooked)
-    {
-        AsaApi::GetHooks().DisableHook(kAddBuffHook, Hook_APrimalBuff_AddBuff);
-        g_add_buff_hooked = false;
-    }
+    DisableAddBuffHook();
 
     if (g_begin_play_hooked)
     {
